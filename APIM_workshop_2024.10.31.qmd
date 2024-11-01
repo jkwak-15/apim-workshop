@@ -1,0 +1,213 @@
+---
+title: "APIM workshop 11/1/2024"
+author: "Judy Kwak"
+format: 
+  pdf:
+    toc: true
+    number-sections: true
+    margin-left: 1in       # Adjust left margin
+    margin-right: 1in      # Adjust right margin
+    text-width: 6.5in      # Adjust text width to control line length
+header-includes:
+  - \usepackage{url} % Allows URLs to wrap within lines
+  - \urlstyle{same}  % Keeps URL text inline
+editor: visual
+---
+
+# Setup
+
+```{r, message=FALSE, warning=FALSE}
+#load packages
+library(haven)
+library(tidyverse)
+library(jtools)
+library(lme4)
+library(psych)
+
+
+# Import individual-level data 
+acitelli_ind <- read_csv("https://raw.githubusercontent.com/RandiLGarcia/2day-dyad-workshop/refs/heads/master/Data/acitelli%20individual.csv")
+
+# Recode gender variable 
+acitelli_ind <- acitelli_ind %>%
+  mutate(gender = recode(gender, 
+                         "-1" = 0, #females are 0
+                         "1" = 1)) #males are 1
+#recoding helps to make the interpretation easier later
+```
+
+# About the dataset
+
+Today we'll use couples data from Linda Acitelli ([Acitelli, 1997](https://journals.sagepub.com/doi/abs/10.1177/0265407597142006)). Acitelli (1997) examined 148 married couples (N=296) and assessed data from both individuals within dyads in a romantic relationship. For today, we'll focus on the following variables:
+
+1.  self_pos (ratings of positive views of the self)
+2.  genderE (gender, where 0=F, 1=M)
+3.  tension (ratings of tension in the relationship, ranging 1-4)
+
+For more information on the variables, [View codebook](https://github.com/RandiLGarcia/2day-dyad-workshop/blob/0348fdf0d701babc8540dde71a9b2674562eb047/Codebooks/Kashy%20Codebook.doc) for the dataset
+
+# Today's research question:
+
+**Do positive views of the self predict relationship tension in romantic couples?**
+
+# Step 1: Convert individual to pairwise data
+
+The raw data you collect will just be an individual dataset, and you will need to convert it from individual to pairwise.
+
+To make it easy on myself, I typically just use [David Kenny's handy online app](https://davidakenny.net/RDDD.htm) to convert datasets from being individual –\>pairwise data
+
+But you can try doing it through coding in R and compare if you'd like. Ethan Young has [step-by-step instructions](https://www.ethan-young.com/code/restructuring-dyadic-data/) on how to do this online, but I haven't used it before. For today, we'll use [code provided by Randi Garcia](https://randilgarcia.github.io/week-dyad-workshop/#Day_1:_Definitions,_Nonindependence,_and_Data).
+
+```{r}
+##Individual to Pairwise Structure
+
+# Create dataframe for actor-variables
+tempA <- acitelli_ind %>% 
+  mutate(genderE = gender, partnum = 1) %>%
+  mutate(gender = ifelse(gender == 1, "A", "P")) %>%
+  gather(variable, value, self_pos:genderE) %>%
+  unite(var_gender, variable, gender) %>%
+  spread(var_gender, value)
+
+# Create dataframe for partner-variables
+tempB <- acitelli_ind %>% 
+  mutate(genderE = gender, partnum = 2) %>%
+  mutate(gender = ifelse(gender == 1, "P", "A")) %>%
+  gather(variable, value, self_pos:genderE)%>%
+  unite(var_gender, variable, gender) %>%
+  spread(var_gender, value)
+
+# Bind the 2 dataframes to create a pairwise dataset
+acitelli_pair <- bind_rows(tempA, tempB) %>%
+  arrange(cuplid) 
+
+# Preview pairwise data  
+head(acitelli_pair)
+
+# Look at variable names
+names(acitelli_pair)
+```
+
+# Step 2: Calculate ICC
+
+Now that we have a research question, we'll need to examine the intraclass correlation (ICC) to examine how much of the variance is within-dyad vs. between-dyad
+
+```{r}
+# Fit an intercept-only model fior self_pos
+mod_selfpos <- lmer(self_pos_A ~ 1 + (1 | cuplid), data = acitelli_pair) 
+# specifying random intercept based on dyad (fixed slope) 
+# due to the cross-sectional design 
+# (one measurement at one time point with a dyad)
+
+# Fit intercept-only model for tension
+mod_tension <- lmer(tension_A ~ 1 + (1 | cuplid), data = acitelli_pair) 
+# specifying random intercept based on dyad (fixed slope) 
+# due to the cross-sectional design 
+#(one measurement at one time point with a dyad)
+
+
+# Extract variance components for self_pos
+var_components_sp <- as.data.frame(VarCorr(mod_selfpos))
+group_variance_sp <- var_components_sp$vcov[1]    # Random intercept variance
+residual_variance_sp <- var_components_sp$vcov[2]  # Residual variance
+
+# Extract variance components for tension
+var_components_t <- as.data.frame(VarCorr(mod_tension))
+group_variance_t <- var_components_t$vcov[1]    # Random intercept variance
+residual_variance_t <- var_components_t$vcov[2]  # Residual variance
+
+
+# Calculate ICC for self-post
+icc_selfpos <- group_variance_sp / (group_variance_sp + residual_variance_sp)
+
+# Calculate ICC for tension
+icc_tension <- group_variance_t / (group_variance_t + residual_variance_t)
+
+# View ICCs
+print(icc_selfpos) #ICC 0.087
+print(icc_tension) #ICC 0.319
+```
+
+## Interpreting ICC:
+
+A higher ICC indicates high clustering, whereas an ICC of 0 would indicate there is no group effect. In other words, no variance is explained by the dyad, and all variance is within-groups
+
+In this case, an ICC of 0.319 indicates that about 32% of the variance in tension can be attributed between-dyads, while 68% of the variance is attributed within-dyads. This is good justification for using a dyadic approach to analyzing the data.
+
+# Step 3: Mean-center variables of interest
+
+```{r}
+# grand-mean center all relevant predictors
+library(jtools)
+
+acitelli_pair$self_pos_A_mc <- center(acitelli_pair$self_pos_A) #actor variable
+acitelli_pair$self_pos_P_mc <- center(acitelli_pair$self_pos_P) #partner variable
+```
+
+This makes interpretability of the results much easier, because 0=mean
+
+# Step 4: Analyze data using APIM (MLM)
+
+## Assuming distinguishable dyads 
+
+Using an interaction approach:
+
+1.  Add distinguishing variable as a covariate. Note its coding.
+2.  Have the distinguishing variable interact with the actor and the partner effects.
+3.  These interactions evaluate whether actor and partner effects are the same for the two people.
+
+```{r}
+# Taking a distinguishable approach
+library(nlme)
+
+# Fit model
+apim_tension_gender <- lme(tension_A ~
+                             self_pos_A_mc + self_pos_P_mc + genderE_A +
+                             self_pos_A_mc*genderE_A + self_pos_P_mc*genderE_A,
+                           random = ~1|cuplid,
+                           data=acitelli_pair,
+                           na.action = na.omit)
+
+# View results
+summary(apim_tension_gender)
+```
+
+### **Interpretation of Effects:**
+
+-   **Intercept** = 2.57---The predicted score on tension for husbands and wives who have a 0 on how positively they see themselves
+
+-   **self_pos_A_mc** = -0.45---[Actor Effect]{.underline}: The more positively you view yourself, the less tension you report in the marriage.
+
+-   **self_pos_P_mc** = 0.02 (ns)---[Partner Effect]{.underline}: The more positively your partner views themselves, the more tension you report in the marriage.
+
+-   **genderE_A** = -0.21 (ns)---Husband are very slightly less satisfied (about .21 points less) than wives when you control for how they both view themselves.
+
+-   **self_pos_A_mc X genderE_A** = 0.47---The actor effect is stronger for husbands.
+
+-   **self_pos_P_mc X genderE_A** = -0.22---The partner effect is stronger H -\> W than W -\> H.
+
+## Assuming indistinguishable dyads 
+
+Technically, this approach is incorrect since there IS a distinguishable variable. However, I'm including this model to illustrate the differences between distinguishable vs. indistinguishable dyads. If we had indistinguishable dyads, the model just wouldn't include the distinguishing variable (example below).
+
+```{r}
+# Fit model
+apim_tension <- lme(tension_A ~
+                      self_pos_A_mc + self_pos_P_mc,
+                           random = ~1|cuplid,
+                           data=acitelli_pair,
+                           na.action = na.omit)
+
+# View results
+summary(apim_tension)
+```
+
+### Interpretation of effects:
+
+NOTE: NOT accounting for gender, the distinguishing variable:
+
+-   **Intercept** = 2.43---The predicted score on tension for participants who have a 0 on how positively they see themselves
+
+-   **self_pos_A_mc** = -0.16 (ns)---[Actor Effect]{.underline}: no effect of how you view yourself and the tension you report in the relationship
+
+-   self_pos_P_mc = -16 (ns)---[Partner Effect]{.underline}: How your partner views themselves is NOT predictive of the tension you report in the relationship
